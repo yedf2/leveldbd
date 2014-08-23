@@ -47,7 +47,6 @@ int main(int argc, const char* argv[]) {
 
     Signal::signal(SIGINT, [&]{base.exit(); });
     base.loop();
-
     readPool.exit().join();
     writePool.exit().join();
     return 0;

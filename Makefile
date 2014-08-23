@@ -1,7 +1,7 @@
 CC=cc
 CXX=g++
 CXXFLAGS= -DOS_LINUX -g -std=c++11 -Wall -I. -I../handy/handy -Ideps/leveldb/include
-LDFLAGS= -pthread -L../handy/handy -lhandy deps/leveldb/libleveldb.a deps/snappy/.libs/libsnappy.a
+LDFLAGS= -pthread ../handy/handy/libhandy.a deps/leveldb/libleveldb.a deps/snappy/.libs/libsnappy.a
 
 SOURCES = leveldbd.cc handler.cc
 
@@ -15,7 +15,7 @@ clean:
 	-rm -f $(PROGRAM)
 	-rm -f *.o
 
-$(PROGRAM): $(OBJECTS)
+$(PROGRAM): $(OBJECTS) ../handy/handy/libhandy.a
 	$(CXX) -o $@ $(OBJECTS) $(LDFLAGS)
 
 .cc.o:
