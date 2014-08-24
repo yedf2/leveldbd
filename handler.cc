@@ -13,29 +13,65 @@ void setGlobalConfig(Conf& conf) {
 
 static void handleBatch(leveldb::DB* db, HttpRequest& req, HttpResponse& resp) {
     Slice uri = req.uri;
-    Slice show = "/show-next/";
-    if (uri == show || uri.starts_with(show)){
-        Slice k = uri.ltrim(show.size());
-        leveldb::Iterator* it = db->NewIterator(leveldb::ReadOptions());
-        unique_ptr<leveldb::Iterator> rel1(it);
-        int n = 0;
+    Slice navn = "/nav-next";
+    Slice navp = "/nav-prev";
+    int n = 0;
+    leveldb::Iterator* it = db->NewIterator(leveldb::ReadOptions());
+    unique_ptr<leveldb::Iterator> rel1(it);
+    string ln;
+    if (uri.starts_with(navn)){
+        resp.body.append("<a href=\"/nav-next/\">first-page</a></br>");
+        Slice k = uri.ltrim(navn.size());
         Slice key = k;
-        for (it->Seek(convSlice(k));
-            it->Valid() && n++ < g_page_limit;
-            it->Next())
-        {   
-            key = convSlice(it->key());
-            if (key == k) { //not including the start
-                continue;
-            }
-            string ln = util::format("<a href=\"/d/%.*s\">%.*s</a></br>",
-                (int)key.size(), key.data(), (int)key.size(), key.data()); 
-            resp.body.append(ln);
-        }
-        string ln = util::format("<a href=\"/show-next/%.*s\">next-page</a></br>",
+        ln = util::format("<a href=\"/nav-prev%.*s\">prev-page</a><br/>",
             (int)key.size(), key.data());
         resp.body.append(ln);
-
+        for (it->Seek(convSlice(k)); it->Valid(); it->Next()) {
+            key = convSlice(it->key());
+            ln = util::format("<a href=\"/d%.*s\">%.*s</a></br>",
+                (int)key.size(), key.data(), (int)key.size(), key.data()); 
+            resp.body.append(ln);
+            if (++n>=g_page_limit) {
+                break;
+            }
+        }
+        ln = util::format("<a href=\"/nav-next%.*s\">next-page</a></br>",
+            (int)key.size(), key.data());
+        resp.body.append(ln);
+        resp.body.append("<a href=\"/nav-prev=\">last-page</a></br>");
+    } else if (uri.starts_with(navp)) {
+        Slice k = uri.ltrim(navp.size());
+        Slice key = k;
+        vector<string> lns;
+        resp.body.append("<a href=\"/nav-next/\">first-page</a></br>");
+        ln = util::format("<a href=\"/nav-next%.*s\">next-page</a></br>",
+            (int)key.size(), key.data());
+        lns.push_back(ln);
+        if (key[0] == '=') {
+            it->SeekToLast();
+        } else {
+            it->Seek(convSlice(k));
+        }
+        for (; it->Valid(); it->Prev()) {
+            k = convSlice(it->key());
+            if (key[0] < '/') {
+                break;
+            }
+            key = k;
+            ln = util::format("<a href=\"/d%.*s\">%.*s</a></br>",
+                (int)key.size(), key.data(), (int)key.size(), key.data()); 
+            lns.push_back(ln);
+            if (++n>=g_page_limit) {
+                break;
+            }
+        }
+        ln = util::format("<a href=\"/nav-prev%.*s\">prev-page</a><br/>",
+            (int)key.size(), key.data());
+        lns.push_back(ln);
+        for(auto it = lns.rbegin(); it != lns.rend(); it ++) {
+            resp.body.append(*it);
+        }
+        resp.body.append("<a href=\"/nav-prev=\">last-page</a></br>");
     } else {
         resp.setNotFound();
     }
