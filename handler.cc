@@ -11,7 +11,48 @@ void setGlobalConfig(Conf& conf) {
     g_batch_size = g_conf.getInteger("", "batch_size", 3*1024*1024);
 }
 
-static void handleBatch(leveldb::DB* db, HttpRequest& req, HttpResponse& resp) {
+static void handleRange(leveldb::DB* db, HttpRequest& req, HttpResponse& resp) {
+    Slice uri = req.uri;
+    Slice rget = "/range-get";
+    if (!uri.starts_with(rget)) {
+        resp.setNotFound();
+        return;
+    }
+    Slice bkey = uri.ltrim(rget.size());
+    if (bkey.empty()) {
+        bkey = "/";
+    }
+    Slice ekey = req.getArg("end");
+    if (ekey.empty()) {
+        ekey = "=";
+    }
+    bool inc = req.getArg("inc") == "1";
+    leveldb::Iterator* it = db->NewIterator(leveldb::ReadOptions());
+    unique_ptr<leveldb::Iterator> rel1(it);
+    int n = 0;
+    leveldb::Slice lekey = convSlice(ekey);
+    leveldb::Slice lbkey = convSlice(bkey);
+    it->Seek(lbkey);
+    if (!inc && it->key() == lbkey) {
+        it->Next();
+    }
+    for (; it->Valid(); it->Next()) {
+        if (it->key().compare(lekey) >= 0) {
+            break;
+        }
+        resp.body.append(it->key().data(), it->key().size());
+        char buf[64];
+        int cn = snprintf(buf, sizeof buf, " %lu\n", it->value().size());
+        resp.body.append(buf, cn);
+        resp.body.append(it->value().data(), it->value().size());
+        resp.body.append("\n");
+        if (++n >= g_batch_count || resp.body.size() >= (size_t)g_batch_size) {
+            break;
+        }
+    }
+}
+
+static void handleNav(leveldb::DB* db, HttpRequest& req, HttpResponse& resp) {
     Slice uri = req.uri;
     Slice navn = "/nav-next";
     Slice navp = "/nav-prev";
@@ -19,8 +60,8 @@ static void handleBatch(leveldb::DB* db, HttpRequest& req, HttpResponse& resp) {
     leveldb::Iterator* it = db->NewIterator(leveldb::ReadOptions());
     unique_ptr<leveldb::Iterator> rel1(it);
     string ln;
+    resp.body.append("<a href=\"/nav-next/\">first-page</a></br>");
     if (uri.starts_with(navn)){
-        resp.body.append("<a href=\"/nav-next/\">first-page</a></br>");
         Slice k = uri.ltrim(navn.size());
         Slice key = k;
         ln = util::format("<a href=\"/nav-prev%.*s\">prev-page</a><br/>",
@@ -38,12 +79,10 @@ static void handleBatch(leveldb::DB* db, HttpRequest& req, HttpResponse& resp) {
         ln = util::format("<a href=\"/nav-next%.*s\">next-page</a></br>",
             (int)key.size(), key.data());
         resp.body.append(ln);
-        resp.body.append("<a href=\"/nav-prev=\">last-page</a></br>");
     } else if (uri.starts_with(navp)) {
         Slice k = uri.ltrim(navp.size());
         Slice key = k;
         vector<string> lns;
-        resp.body.append("<a href=\"/nav-next/\">first-page</a></br>");
         ln = util::format("<a href=\"/nav-next%.*s\">next-page</a></br>",
             (int)key.size(), key.data());
         lns.push_back(ln);
@@ -71,10 +110,11 @@ static void handleBatch(leveldb::DB* db, HttpRequest& req, HttpResponse& resp) {
         for(auto it = lns.rbegin(); it != lns.rend(); it ++) {
             resp.body.append(*it);
         }
-        resp.body.append("<a href=\"/nav-prev=\">last-page</a></br>");
     } else {
         resp.setNotFound();
+        return;
     }
+    resp.body.append("<a href=\"/nav-prev=\">last-page</a></br>");
 }
 
 
@@ -108,8 +148,10 @@ void handleReq(EventBase& base, leveldb::DB* db, const TcpConnPtr& tcon) {
         } else if (!s.ok()) {
             resp.setStatus(500, "Internal Error");
         }
-    }  else {
-        handleBatch(db, req, resp);
+    } else if (uri.starts_with("/nav-")){
+        handleNav(db, req, resp);
+    } else if (uri.starts_with("/range-")){
+        handleRange(db, req, resp);
     }
     info("req %s processed status %d length %lu",
         req.query_uri.c_str(), resp.status, resp.getBody().size());
