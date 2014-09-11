@@ -4,18 +4,13 @@
 #include <logging.h>
 #include <conf.h>
 #include "leveldb/db.h"
+#include "globals.h"
+#include "logdb.h"
 
 using namespace std;
 using namespace handy;
 
-extern Conf g_conf;
-extern int g_page_limit;
-extern int g_batch_count;
-extern int g_batch_size;
+int64_t getSize(Slice bkey, Slice ekey, leveldb::DB* db);
 
-void setGlobalConfig(Conf& conf);
-
-void handleReq(EventBase& base, leveldb::DB* db, const TcpConnPtr& con);
-inline leveldb::Slice convSlice(Slice s) { return leveldb::Slice(s.data(), s.size()); }
-inline Slice convSlice(leveldb::Slice s) { return Slice(s.data(), s.size()); }
+void handleReq(EventBase& base, LogDb* db, const TcpConnPtr& con);
 

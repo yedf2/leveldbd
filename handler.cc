@@ -1,14 +1,12 @@
 #include "handler.h"
 
-Conf g_conf;
-int g_page_limit;
-int g_batch_count;
-int g_batch_size;
-
-void setGlobalConfig(Conf& conf) {
-    g_page_limit = g_conf.getInteger("", "page_limit", 1000);
-    g_batch_count = g_conf.getInteger("", "batch_count", 100*1000);
-    g_batch_size = g_conf.getInteger("", "batch_size", 3*1024*1024);
+int64_t getSize(Slice bkey, Slice ekey, leveldb::DB* db) {
+    leveldb::Range ra;
+    ra.start = convSlice(bkey);
+    ra.limit = convSlice(ekey);
+    uint64_t sz = 0;
+    db->GetApproximateSizes(&ra, 1, &sz);
+    return (int64_t)sz;
 }
 
 static void handleRange(leveldb::DB* db, HttpRequest& req, HttpResponse& resp) {
@@ -40,7 +38,9 @@ static void handleRange(leveldb::DB* db, HttpRequest& req, HttpResponse& resp) {
         if (it->key().compare(lekey) >= 0) {
             break;
         }
-        resp.body.append(it->key().data(), it->key().size());
+        leveldb::Slice k1(it->key());
+        k1.remove_prefix(1);
+        resp.body.append(k1.data(), k1.size());
         char buf[64];
         int cn = snprintf(buf, sizeof buf, " %lu\n", it->value().size());
         resp.body.append(buf, cn);
@@ -69,14 +69,15 @@ static void handleNav(leveldb::DB* db, HttpRequest& req, HttpResponse& resp) {
         resp.body.append(ln);
         for (it->Seek(convSlice(k)); it->Valid(); it->Next()) {
             key = convSlice(it->key());
-            ln = util::format("<a href=\"/d%.*s\">%.*s</a></br>",
+            key = key.ltrim(1);
+            ln = util::format("<a href=\"/d/%.*s\">%.*s</a></br>",
                 (int)key.size(), key.data(), (int)key.size(), key.data()); 
             resp.body.append(ln);
             if (++n>=g_page_limit) {
                 break;
             }
         }
-        ln = util::format("<a href=\"/nav-next%.*s\">next-page</a></br>",
+        ln = util::format("<a href=\"/nav-next/%.*s\">next-page</a></br>",
             (int)key.size(), key.data());
         resp.body.append(ln);
     } else if (uri.starts_with(navp)) {
@@ -96,15 +97,15 @@ static void handleNav(leveldb::DB* db, HttpRequest& req, HttpResponse& resp) {
             if (key[0] < '/') {
                 break;
             }
-            key = k;
-            ln = util::format("<a href=\"/d%.*s\">%.*s</a></br>",
+            key = k.ltrim(1);
+            ln = util::format("<a href=\"/d/%.*s\">%.*s</a></br>",
                 (int)key.size(), key.data(), (int)key.size(), key.data()); 
             lns.push_back(ln);
             if (++n>=g_page_limit) {
                 break;
             }
         }
-        ln = util::format("<a href=\"/nav-prev%.*s\">prev-page</a><br/>",
+        ln = util::format("<a href=\"/nav-prev/%.*s\">prev-page</a><br/>",
             (int)key.size(), key.data());
         lns.push_back(ln);
         for(auto it = lns.rbegin(); it != lns.rend(); it ++) {
@@ -117,41 +118,59 @@ static void handleNav(leveldb::DB* db, HttpRequest& req, HttpResponse& resp) {
     resp.body.append("<a href=\"/nav-prev=\">last-page</a></br>");
 }
 
+static void handleSize(leveldb::DB* db, HttpRequest& req, HttpResponse& resp) {
+    Slice uri = req.uri;
+    Slice pre = "/size";
+    Slice bkey = uri.ltrim(pre.size());
+    Slice ekey = req.getArg("end");
+    if (ekey.empty()) {
+        ekey = "=";
+    }
+    int64_t sz = getSize(bkey, ekey, db);
+    resp.body = util::format("%ld", sz);
+}
 
-void handleReq(EventBase& base, leveldb::DB* db, const TcpConnPtr& tcon) {
+void handleReq(EventBase& base, LogDb* db, const TcpConnPtr& tcon) {
     HttpConn* con = HttpConn::asHttp(tcon);
     HttpRequest& req = con->getRequest();
-    leveldb::Status s;
+    Status mst;
     HttpResponse& resp = con->getResponse();
     Slice uri = req.uri;
     Slice d = "/d/";
     string value;
+    leveldb::DB* ldb = db->getdb();
     if (uri.starts_with(d)) {
-        leveldb::Slice key = convSlice(uri.ltrim(d.size() - 1));
+        Slice localkey = uri.ltrim(d.size() - 1);
+        leveldb::Slice key = convSlice(localkey);
         if (req.method == "GET") {
-            s = db->Get(leveldb::ReadOptions(), key, &value);
+            leveldb::Status s = ldb->Get(leveldb::ReadOptions(), key, &value);
             if (s.ok()) {
                 resp.body2 = value;
-            } else {
+            } else if (s.IsNotFound()) {
                 resp.setNotFound();
+            } else {
+                mst = (ConvertStatus)s;
             }
         } else if (req.method == "POST") {
-            leveldb::Slice v = convSlice(req.getBody());
-            s = db->Put(leveldb::WriteOptions(), key, v);
+            mst = db->write(localkey, req.getBody());
         } else if (req.method == "DELETE") {
-            s = db->Delete(leveldb::WriteOptions(), key);
+            mst = db->remove(localkey);
         } else {
             resp.setStatus(403, "unknown method");
         }
-        if (s.IsNotFound()) {
-            resp.setNotFound();
-        } else if (!s.ok()) {
+        if (!mst.ok()) {
             resp.setStatus(500, "Internal Error");
+            error("%.*s error %s", (int)req.method.size(), req.method.data(),
+                    mst.toString().c_str());
         }
     } else if (uri.starts_with("/nav-")){
-        handleNav(db, req, resp);
+        handleNav(ldb, req, resp);
     } else if (uri.starts_with("/range-")){
-        handleRange(db, req, resp);
+        handleRange(ldb, req, resp);
+    } else if (uri.starts_with("/size/")) {
+        handleSize(ldb, req, resp);
+    } else {
+        resp.setNotFound();
     }
     info("req %s processed status %d length %lu",
         req.query_uri.c_str(), resp.status, resp.getBody().size());
