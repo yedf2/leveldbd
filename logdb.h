@@ -10,17 +10,15 @@
 #include "leveldb/db.h"
 #include "leveldb/env.h"
 #include "globals.h"
+#include "logfile.h"
 
-struct LogFile: leveldb::WritableFile {
-    LogFile():fd_(-1) {}
-    Status open(const string& name);
-    leveldb::Status Close();
-    leveldb::Status Append(const leveldb::Slice& record);
-    leveldb::Status Flush() { return leveldb::Status::OK(); }
-    leveldb::Status Sync();
-    size_t size() { return lseek(fd_, 0, SEEK_END); }
-    ~LogFile() { Close(); }
-    int fd_;
+struct FileName {
+    static string binlogPrefix() { return "binlog-"; }
+    static bool isBinlog(const std::string& name) { return Slice(name).starts_with(binlogPrefix()); }
+    static int64_t binlogNum(const string& name);
+    static string binlogFile(int64_t no) { return binlogPrefix().data()+util::format("%05d", no); }
+    static string closedFile() { return "dbclosed.txt"; }
+    static string slaveFile() { return "slave-status"; }
 };
 
 enum BinlogOp { BinlogWrite=1, BinlogDelete, };
@@ -36,8 +34,16 @@ struct LogRecord {
     static Status decodeRecord(Slice data, LogRecord* rec);
 };
 
+struct SlaveStatus {
+    string host;
+    int port;
+    string key;
+    int64_t fileno;
+    int64_t offset;
+};
+
 struct LogDb: public mutex {
-    LogDb():dbid_(-1), binlogSize_(0), lastFile_(-1), curLog_(NULL), curLogFile_(NULL), db_(NULL) {}
+    LogDb():dbid_(-1), binlogSize_(0), lastFile_(0), curLog_(NULL), db_(NULL) {}
     Status init(Conf& conf);
     leveldb::DB* getdb() { return db_; }
     Status write(Slice key, Slice value);
@@ -50,12 +56,15 @@ struct LogDb: public mutex {
     int dbid_;
     int binlogSize_;
     int lastFile_;
-    void* curLog_;
-    LogFile* curLogFile_;
+    LogFile* curLog_;
     leveldb::DB* db_;
+    SlaveStatus slave_;
 
     Status checkCurLog_();
     Status applyRecord_(LogRecord& rec);
     Status operateDb_(LogRecord& rec);
     Status operateLog_(Slice data);
+    Status loadLogs_();
+    Status loadSlave_();
+    Status saveSlave_();
 };

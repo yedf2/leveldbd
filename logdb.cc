@@ -1,16 +1,5 @@
 #include "logdb.h"
 #include <file.h>
-#include <leveldb/env.h>
-#include <db/log_reader.h>
-#include <db/log_writer.h>
-
-struct FileName {
-    static string binlogPrefix() { return "binlog-"; }
-    static bool isBinlog(const std::string& name) { return Slice(name).starts_with(binlogPrefix()); }
-    static int64_t binlogNum(const string& name);
-    static string binlogFile(int64_t no) { return binlogPrefix().data()+util::format("%05d", no); }
-    static string closedFile() { return "/dbclosed.txt"; }
-};
 
 int64_t FileName::binlogNum(const string& name) {
     Slice s1(name);
@@ -82,71 +71,33 @@ Status LogRecord::decodeRecord(Slice data, LogRecord* rec){
 }
 
 
-Status LogFile::open(const string& name) {
-    fd_ = ::open(name.c_str(), O_WRONLY|O_CREAT|O_APPEND, 0622);
-    if (fd_ < 0) {
-        Status s = Status::ioError("open", name);
-        error("io error %s", s.toString().c_str());
-        return s;
-    }
-    return Status();
-}
-
-leveldb::Status LogFile::Close() {
-    if (fd_ >= 0) {
-        int r = ::close(fd_);
-        if (r < 0) {
-            return leveldb::Status::IOError("close error");
-        }
-    }
-    return leveldb::Status::OK();
-}
-
-leveldb::Status LogFile::Append(const leveldb::Slice& record) {
-    int wd = ::write(fd_, record.data(), record.size());
-    if (wd != (int)record.size()) {
-        return leveldb::Status::IOError("write error");
-    }
-    return leveldb::Status::OK();
-}
-
-leveldb::Status LogFile::Sync() {
-    int r = fsync(fd_);
-    if (r < 0) {
-        return leveldb::Status::IOError("fsync error");
-    }
-    return leveldb::Status::OK();
-}
-
-struct ErrorReporter: public leveldb::log::Reader::Reporter {
-    virtual void Corruption(size_t bytes, const leveldb::Status& status) {
-        error("corruption %lu bytes %s", bytes, status.ToString().c_str());
-    }
-};
-
 Status LogDb::dumpFile(const string& name) {
-    leveldb::SequentialFile* f = NULL;
-    Status s = (ConvertStatus)leveldb::Env::Default()->NewSequentialFile(name, &f);
-    if (s.ok()) {
-        unique_ptr<leveldb::SequentialFile> rel1(f);
-        ErrorReporter ep;
-        leveldb::log::Reader reader(f, &ep, 1, 0);
+
+    LogFile lf;
+    Status st = lf.open(name);
+    if (st.ok()) {
+        Slice rec;
+        int64_t offset = 0;
         string scrach;
-        leveldb::Slice rec;
-        for (int i = 0; reader.ReadRecord(&rec, &scrach); i ++) {
-            LogRecord lr;
-            s = LogRecord::decodeRecord(convSlice(rec), &lr);
-            if (!s.ok()) {
+        LogRecord lr;
+        int i = 0;
+        for (;;) {
+            st = lf.getRecord(&offset, &rec, &scrach);
+            if (!st.ok() || rec.size() == 0) {
                 break;
             }
-            printf("record %d: op %s time %ld %s key %.*s value %.*s\n", i,
+            st = LogRecord::decodeRecord(rec, &lr);
+            if (!st.ok()) {
+                break;
+            }
+            printf("record %d: op %s time %ld %s key %.*s value %.*s\n", ++i,
                 lr.op==BinlogWrite?"WRITE":"DELETE", (long)lr.tm,
                 util::readableTime(lr.tm).c_str(),
                 (int)lr.key.size(), lr.key.data(),
                 (int)lr.value.size(), lr.value.data());
         }
     }
-    return s;
+    return st;
 }
 
 Status LogDb::init(Conf& conf) {
@@ -168,9 +119,47 @@ Status LogDb::init(Conf& conf) {
     if (dbid_ <= 0) {
         return Status::fromFormat(EINVAL, "dbid should be set a positive interger when binlog enabled");
     }
+    s = loadLogs_();
+    if (s.ok()) {
+        s = loadSlave_();
+    }
+    return s;
+}
+
+Status LogDb::loadSlave_() {
+    string cont;
+    Status st = file::getContent(binlogDir_ + FileName::slaveFile(), cont);
+    if (st.code() == ENOENT) {
+        return Status();
+    }
+    Slice data = cont;
+    vector<Slice> lns = data.split('\n');
+    size_t c = 0;
+    if (lns.size() > c) {
+        slave_.host = lns[c].eatWord();
+    }
+    if (lns.size() > ++c) {
+        slave_.port = atoi(lns[c].data());
+    }
+    if (lns.size() > ++c) {
+        slave_.key = lns[c].eatWord();
+    }
+    if (lns.size() > ++c) {
+        char* e = (char*)lns[c].end();
+        slave_.fileno = strtol(lns[c].data(), &e, 10);
+    }
+    if (lns.size() > ++c) {
+        char* e = (char*)lns[c].end();
+        slave_.offset = strtol(lns[c].data(), &e, 10);
+        return Status();
+    }
+    return Status::fromFormat(EINVAL, "bad format for slave status");
+}
+
+Status LogDb::loadLogs_() {
     file::createDir(binlogDir_); //ignore return value
     vector<string> files;
-    s = file::getChildren(binlogDir_, &files);
+    Status s = file::getChildren(binlogDir_, &files);
     if (!s.ok()) return s;
     vector<int64_t> logs;
     for(size_t i = 0; i < files.size(); i ++) {
@@ -194,49 +183,53 @@ Status LogDb::init(Conf& conf) {
     string cfile = binlogDir_ + FileName::closedFile().data();
     string cont;
     s = file::getContent(cfile, cont);
-    if (s.ok() && cont != "1" && lastFile_) { //not elegantly closed, redo last log record
+    if (s.code() == ENOENT) { //ignore
+        s = Status();
+    } else if (s.ok() && cont != "1" && lastFile_) { //not elegantly closed, redo last log record
         string lastfile = binlogDir_ + FileName::binlogFile(lastFile_);
-        leveldb::Env* env = leveldb::Env::Default();
-        leveldb::SequentialFile* f = NULL;
-        s = (ConvertStatus)env->NewSequentialFile(lastfile, &f);
+        size_t fsz = 0;
+        s = file::getFileSize(lastfile, &fsz);
         if (!s.ok()) {
             return s;
         }
-        unique_ptr<leveldb::SequentialFile> rel1(f);
-        ErrorReporter ep;
-        leveldb::log::Reader reader(f, &ep, 1, 0);
-        string scrach[2];
-        leveldb::Slice rec[2];
-        int i = 0;
-        while(reader.ReadRecord(rec + (i%2), scrach+(i%2))) {
-            i++;
+        LogFile lf;
+        s = lf.open(lastfile);
+        if (!s.ok()) {
+            return s;
         }
-        if (i) {
-            LogRecord lr;
-            i = (i-1)%2;
-            s = LogRecord::decodeRecord(convSlice(rec[i]), &lr);
+        int64_t offset = 0;
+        Slice data;
+        string scrach;
+        for (;;) {
+            s = lf.getRecord(&offset, &data, &scrach);
             if (!s.ok()) {
-                error("decode last binlog record failed %d %s", s.code(), s.msg());
-            } else {
-                if (lr.op == BinlogWrite) {
-                    db_->Put(leveldb::WriteOptions(), convSlice(lr.key), convSlice(lr.value));
-                } else if (lr.op == BinlogDelete) {
-                    db_->Delete(leveldb::WriteOptions(), convSlice(lr.key));
+                return s;
+            }
+            if (offset == (int64_t)fsz) {
+                LogRecord lr;
+                s = LogRecord::decodeRecord(data, &lr);
+                if (!s.ok()) {
+                    return s;
                 }
+                if (lr.op == BinlogWrite) {
+                    s = (ConvertStatus)db_->Put(leveldb::WriteOptions(), convSlice(lr.key), convSlice(lr.value));
+                } else if (lr.op == BinlogDelete) {
+                    s = (ConvertStatus)db_->Delete(leveldb::WriteOptions(), convSlice(lr.key));
+                } else {
+                    return Status::fromFormat(EINVAL, "unknown binlogOp %d", lr.op);
+                }
+
             }
         }
     }
-    s = file::writeContent(cfile, "0");
+    if (s.ok()) {
+        s = file::writeContent(cfile, "0");
+    }
     return s;
 }
 
 LogDb::~LogDb() {
-    if (curLog_) {
-        delete (leveldb::log::Writer*)curLog_;
-    }
-    if (curLogFile_) {
-        delete curLogFile_;
-    }
+    delete curLog_;
     if (binlogDir_.size()) {
         file::writeContent(binlogDir_ + FileName::closedFile(), "1");
     }
@@ -244,25 +237,22 @@ LogDb::~LogDb() {
 
 Status LogDb::checkCurLog_() {
     Status st;
-    if (curLogFile_ && curLogFile_->size() > (size_t)binlogSize_) {
-        delete (leveldb::log::Writer*)curLog_;
+    if (curLog_ && curLog_->size() > binlogSize_) {
+        st = curLog_->sync();
+        delete curLog_;
         curLog_ = NULL;
-        st = (ConvertStatus)curLogFile_->Sync();
-        delete curLogFile_;
-        curLogFile_ = NULL;
     }
     if (!st.ok()) {
         return st;
     }
     if (curLog_ == NULL) {
-        lastFile_++;
-        curLogFile_ = new LogFile();
-        st = curLogFile_->open(binlogDir_ + FileName::binlogFile(lastFile_));
-        if (st.ok()) {
-            curLog_ = new leveldb::log::Writer(curLogFile_);
+        curLog_ = new LogFile();
+        st = curLog_->open(binlogDir_+FileName::binlogFile(lastFile_+1));
+        if (!st.ok()) {
+            delete curLog_;
+            curLog_ = NULL;
         } else {
-            delete curLogFile_;
-            curLogFile_ = NULL;
+            lastFile_ ++;
         }
     }
     return st;
@@ -328,11 +318,9 @@ Status LogDb::operateDb_(LogRecord& rec) {
 }
 
 Status LogDb::operateLog_(Slice data) {
-    Status s;
-    s = checkCurLog_();
+    Status s = checkCurLog_();
     if (s.ok()) {
-        leveldb::log::Writer* wr = (leveldb::log::Writer*)curLog_;
-        s = (ConvertStatus)wr->AddRecord(convSlice(data));
+        s = curLog_->append(data);
     }
     return s;
 }

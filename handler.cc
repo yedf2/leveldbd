@@ -70,7 +70,8 @@ static void handleNav(leveldb::DB* db, HttpRequest& req, HttpResponse& resp) {
         for (it->Seek(convSlice(k)); it->Valid(); it->Next()) {
             key = convSlice(it->key());
             key = key.ltrim(1);
-            ln = util::format("<a href=\"/d/%.*s\">%.*s</a></br>",
+            ln = util::format("<a href=\"%.*s?d=%.*s\">delete</a> <a href=\"/d/%.*s\">%.*s</a></br>",
+                (int)uri.size(), uri.data(), (int)key.size(), key.data(),
                 (int)key.size(), key.data(), (int)key.size(), key.data()); 
             resp.body.append(ln);
             if (++n>=g_page_limit) {
@@ -164,7 +165,15 @@ void handleReq(EventBase& base, LogDb* db, const TcpConnPtr& tcon) {
                     mst.toString().c_str());
         }
     } else if (uri.starts_with("/nav-")){
-        handleNav(ldb, req, resp);
+        string dk = req.getArg("d");
+        if (dk.size()) {
+            mst = db->remove("/"+dk);
+        }
+        if (!mst.ok()) {
+            resp.setStatus(500, "Internal Error");
+        } else {
+            handleNav(ldb, req, resp);
+        }
     } else if (uri.starts_with("/range-")){
         handleRange(ldb, req, resp);
     } else if (uri.starts_with("/size/")) {

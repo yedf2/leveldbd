@@ -112,5 +112,14 @@ void setupStatServer(StatServer& svr, EventBase& base, leveldb::DB* db, const ch
         Status st = file::getContent(g_conf.filename, cont);
         return st.code() ? "Not Found" : cont;
     });
+    svr.onPage("help", "show help", []{
+        return
+            "navigate forward: localhost/nav-next/\n"
+            "navigate backward: localhost/nav-prev/\n"
+            "kv get: localhost/d/key1\n"
+            "kv set: curl localhost/d/key1 -d\"value1\"\n"
+            "kv del: curl -XDELETE localhost/d/key1\n"
+            "";
+    });
 }
 
