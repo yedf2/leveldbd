@@ -40,9 +40,11 @@ struct SlaveStatus {
     string key;
     int64_t fileno;
     int64_t offset;
+    SlaveStatus():port(-1),fileno(-1),offset(-1) {}
+    bool isValid() { return offset != -1; }
 };
 
-struct LogDb: public mutex {
+struct LogDb {
     LogDb():dbid_(-1), binlogSize_(0), lastFile_(0), curLog_(NULL), db_(NULL) {}
     Status init(Conf& conf);
     leveldb::DB* getdb() { return db_; }
@@ -50,7 +52,10 @@ struct LogDb: public mutex {
     Status remove(Slice key);
     Status applyLog(Slice record);
     ~LogDb();
+    SlaveStatus slaveStatus;
+    Status saveSlave();
     static Status dumpFile(const string& name);
+
 
     string binlogDir_, dbdir_;
     int dbid_;
@@ -58,7 +63,6 @@ struct LogDb: public mutex {
     int lastFile_;
     LogFile* curLog_;
     leveldb::DB* db_;
-    SlaveStatus slave_;
 
     Status checkCurLog_();
     Status applyRecord_(LogRecord& rec);
@@ -66,5 +70,4 @@ struct LogDb: public mutex {
     Status operateLog_(Slice data);
     Status loadLogs_();
     Status loadSlave_();
-    Status saveSlave_();
 };

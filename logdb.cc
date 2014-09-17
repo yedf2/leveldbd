@@ -117,9 +117,12 @@ Status LogDb::init(Conf& conf) {
     binlogDir_ = addSlash(binlogDir_);
     dbid_ = conf.getInteger("", "dbid", 0);
     if (dbid_ <= 0) {
-        return Status::fromFormat(EINVAL, "dbid should be set a positive interger when binlog enabled");
+        s = Status::fromFormat(EINVAL, "dbid should be set a positive interger when binlog enabled");
+        error("%s", s.toString().c_str());
     }
-    s = loadLogs_();
+    if (s.ok()) {
+        s = loadLogs_();
+    }
     if (s.ok()) {
         s = loadSlave_();
     }
@@ -136,24 +139,26 @@ Status LogDb::loadSlave_() {
     vector<Slice> lns = data.split('\n');
     size_t c = 0;
     if (lns.size() > c) {
-        slave_.host = lns[c].eatWord();
+        slaveStatus.host = lns[c].eatWord();
     }
     if (lns.size() > ++c) {
-        slave_.port = atoi(lns[c].data());
+        slaveStatus.port = atoi(lns[c].data());
     }
     if (lns.size() > ++c) {
-        slave_.key = lns[c].eatWord();
-    }
-    if (lns.size() > ++c) {
-        char* e = (char*)lns[c].end();
-        slave_.fileno = strtol(lns[c].data(), &e, 10);
+        slaveStatus.key = lns[c].eatWord();
     }
     if (lns.size() > ++c) {
         char* e = (char*)lns[c].end();
-        slave_.offset = strtol(lns[c].data(), &e, 10);
+        slaveStatus.fileno = strtol(lns[c].data(), &e, 10);
+    }
+    if (lns.size() > ++c) {
+        char* e = (char*)lns[c].end();
+        slaveStatus.offset = strtol(lns[c].data(), &e, 10);
         return Status();
     }
-    return Status::fromFormat(EINVAL, "bad format for slave status");
+    st = Status::fromFormat(EINVAL, "bad format for slave status");
+    error("%s", st.toString().c_str());
+    return st;
 }
 
 Status LogDb::loadLogs_() {
@@ -205,6 +210,11 @@ Status LogDb::loadLogs_() {
             if (!s.ok()) {
                 return s;
             }
+            if (data.size() == 0) {
+                error("unexpected end of logfile offset %ld sz %ld dsz %ld ignored",
+                    offset, fsz, data.size());
+                break;
+            }
             if (offset == (int64_t)fsz) {
                 LogRecord lr;
                 s = LogRecord::decodeRecord(data, &lr);
@@ -216,9 +226,10 @@ Status LogDb::loadLogs_() {
                 } else if (lr.op == BinlogDelete) {
                     s = (ConvertStatus)db_->Delete(leveldb::WriteOptions(), convSlice(lr.key));
                 } else {
-                    return Status::fromFormat(EINVAL, "unknown binlogOp %d", lr.op);
+                    s = Status::fromFormat(EINVAL, "unknown binlogOp %d", lr.op);
+                    error("%s", s.toString().c_str());
                 }
-
+                break;
             }
         }
     }
@@ -260,11 +271,13 @@ Status LogDb::checkCurLog_() {
 }
 
 Status LogDb::write(Slice key, Slice value) {
+    debug("write %.*s value len %ld", (int)key.size(), key.data(), value.size());
     LogRecord rec(dbid_, time(NULL), key, value, BinlogWrite);
     return applyRecord_(rec);
 }
 
 Status LogDb::remove(Slice key) {
+    debug("remove %.*s", (int)key.size(), key.data());
     LogRecord rec(dbid_, time(NULL), key, "", BinlogDelete);
     return applyRecord_(rec);
 }
@@ -272,11 +285,12 @@ Status LogDb::remove(Slice key) {
 Status LogDb::applyLog(Slice record) {
     LogRecord rec;
     Status st = LogRecord::decodeRecord(record, &rec);
+    debug("applying %d %ld %d %.*s %d",
+        rec.dbid, rec.tm, rec.op, (int)rec.key.size(), rec.key.data(), (int)rec.value.size());
     if (!st.ok() || rec.dbid == dbid_) { //ignore if dbid is self
         return st;
     }
     if (binlogDir_.size()) {
-        lock_guard<mutex> lk(*this);
         st = operateLog_(record);
         if (!st.ok()) {
             return st;
@@ -291,7 +305,6 @@ Status LogDb::applyLog(Slice record) {
 Status LogDb::applyRecord_(LogRecord& rec) {
     Status st;
     if (binlogDir_.size()) {
-        lock_guard<mutex> lk(*this);
         string data;
         st = rec.encodeRecord(&data);
         if (!st.ok()) {
@@ -314,7 +327,9 @@ Status LogDb::operateDb_(LogRecord& rec) {
     } else if (rec.op == BinlogDelete) {
         return (ConvertStatus) db_->Delete(leveldb::WriteOptions(), convSlice(rec.key));
     }
-    return Status::fromFormat(EINVAL, "unknown op in LogRecord %d", rec.op);
+    Status st = Status::fromFormat(EINVAL, "unknown op in LogRecord %d", rec.op);
+    error("%s", st.toString().c_str());
+    return st;
 }
 
 Status LogDb::operateLog_(Slice data) {

@@ -12,5 +12,5 @@ using namespace handy;
 
 int64_t getSize(Slice bkey, Slice ekey, leveldb::DB* db);
 
-void handleReq(EventBase& base, LogDb* db, const TcpConnPtr& con);
+void handleReq(EventBase& base, LogDb* db, const HttpConnPtr& con);
 

@@ -131,8 +131,7 @@ static void handleSize(leveldb::DB* db, HttpRequest& req, HttpResponse& resp) {
     resp.body = util::format("%ld", sz);
 }
 
-void handleReq(EventBase& base, LogDb* db, const TcpConnPtr& tcon) {
-    HttpConn* con = HttpConn::asHttp(tcon);
+void handleReq(EventBase& base, LogDb* db, const HttpConnPtr& con) {
     HttpRequest& req = con->getRequest();
     Status mst;
     HttpResponse& resp = con->getResponse();
@@ -183,6 +182,6 @@ void handleReq(EventBase& base, LogDb* db, const TcpConnPtr& tcon) {
     }
     info("req %s processed status %d length %lu",
         req.query_uri.c_str(), resp.status, resp.getBody().size());
-    base.safeCall([tcon]{ HttpConn::asHttp(tcon)->sendResponse(); info("resp sended");});
+    base.safeCall([con]{ con->sendResponse(); info("resp sended");});
 }
 
