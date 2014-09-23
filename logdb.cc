@@ -1,12 +1,13 @@
 #include "logdb.h"
 #include <file.h>
+#include "handler.h"
+#include "binlog-msg.h"
 
 int64_t FileName::binlogNum(const string& name) {
     Slice s1(name);
     if (s1.starts_with(binlogPrefix())) {
-        Slice p1 = s1.ltrim(binlogPrefix().size());
-        char* pe = (char*)p1.end();
-        return strtol(p1.begin(), &pe, 10);
+        Slice p1 = s1.sub(binlogPrefix().size());
+        return util::atoi(p1.begin());
     }
     return 0;
 }
@@ -139,21 +140,19 @@ Status LogDb::loadSlave_() {
     vector<Slice> lns = data.split('\n');
     size_t c = 0;
     if (lns.size() > c) {
-        slaveStatus.host = lns[c].eatWord();
+        slaveStatus_.host = lns[c].eatWord();
     }
     if (lns.size() > ++c) {
-        slaveStatus.port = atoi(lns[c].data());
+        slaveStatus_.port = atoi(lns[c].data());
     }
     if (lns.size() > ++c) {
-        slaveStatus.key = lns[c].eatWord();
+        slaveStatus_.key = lns[c].eatWord();
     }
     if (lns.size() > ++c) {
-        char* e = (char*)lns[c].end();
-        slaveStatus.fileno = strtol(lns[c].data(), &e, 10);
+        slaveStatus_.fileno = util::atoi(lns[c].data());
     }
     if (lns.size() > ++c) {
-        char* e = (char*)lns[c].end();
-        slaveStatus.offset = strtol(lns[c].data(), &e, 10);
+        slaveStatus_.offset = util::atoi(lns[c].data());
         return Status();
     }
     st = Status::fromFormat(EINVAL, "bad format for slave status");
@@ -175,7 +174,7 @@ Status LogDb::loadLogs_() {
     }
     sort(logs.begin(), logs.end());
     if (logs.size()) { // remove last empty log file
-        string lastfile = FileName::binlogFile(logs.back());
+        string lastfile = binlogDir_+FileName::binlogFile(logs.back());
         uint64_t sz;
         Status s2 = file::getFileSize(lastfile, &sz);
         if (s2.ok() && sz == 0) {
@@ -236,38 +235,39 @@ Status LogDb::loadLogs_() {
     if (s.ok()) {
         s = file::writeContent(cfile, "0");
     }
+    checkCurLog_();
     return s;
 }
 
 LogDb::~LogDb() {
+    if (slaveStatus_.changed) {
+        saveSlave_();
+    }
     delete curLog_;
     if (binlogDir_.size()) {
         file::writeContent(binlogDir_ + FileName::closedFile(), "1");
     }
+    delete db_;
 }
 
 Status LogDb::checkCurLog_() {
     Status st;
     if (curLog_ && curLog_->size() > binlogSize_) {
         st = curLog_->sync();
+        if (!st.ok()) {
+            return st;
+        }
         delete curLog_;
         curLog_ = NULL;
     }
-    if (!st.ok()) {
-        return st;
-    }
     if (curLog_ == NULL) {
         curLog_ = new LogFile();
-        st = curLog_->open(binlogDir_+FileName::binlogFile(lastFile_+1));
-        if (!st.ok()) {
-            delete curLog_;
-            curLog_ = NULL;
-        } else {
+        st = curLog_->open(binlogDir_+FileName::binlogFile(lastFile_+1), false);
+        if (st.ok()) {
             lastFile_ ++;
         }
     }
     return st;
-
 }
 
 Status LogDb::write(Slice key, Slice value) {
@@ -285,8 +285,8 @@ Status LogDb::remove(Slice key) {
 Status LogDb::applyLog(Slice record) {
     LogRecord rec;
     Status st = LogRecord::decodeRecord(record, &rec);
-    debug("applying %d %ld %d %.*s %d",
-        rec.dbid, rec.tm, rec.op, (int)rec.key.size(), rec.key.data(), (int)rec.value.size());
+    debug("applying %d %ld %s %.*s %d",
+        rec.dbid, rec.tm, strOp(rec.op), (int)rec.key.size(), rec.key.data(), (int)rec.value.size());
     if (!st.ok() || rec.dbid == dbid_) { //ignore if dbid is self
         return st;
     }
@@ -337,6 +337,86 @@ Status LogDb::operateLog_(Slice data) {
     if (s.ok()) {
         s = curLog_->append(data);
     }
+    vector<HttpConnPtr> conns = removeSlaveConnsLock();
+    for (auto& con: conns) {
+        EventBase* base = con->getBase();
+        if (base) {
+            handleBinlog(this, base, con);
+        } else {
+            error("connection closed, but sending response in operateLog");
+        }
+    }
     return s;
 }
 
+Status LogDb::saveSlave_() {
+    string cont = util::format("%s #host\n%d #port\n%s # / begin key = end key\n%ld #binlog no\n%ld #binlog offset\n",
+        slaveStatus_.host.c_str(), slaveStatus_.port, slaveStatus_.key.c_str(), slaveStatus_.fileno, slaveStatus_.offset);
+    string fname = binlogDir_ + FileName::slaveFile();
+    Status st = file::renameSave(fname, fname+".tmp", cont);
+    if (!st.ok()) {
+        error("save slave status failed %s", st.toString().c_str());
+        return st;
+    }
+    info("save slave staus ok %s %ld %ld", slaveStatus_.key.c_str(), slaveStatus_.fileno, slaveStatus_.offset);
+    slaveStatus_.changed = false;
+    slaveStatus_.lastSaved = time(NULL);
+    return Status();
+}
+
+Status LogDb::fetchLogLock(int64_t* fileno, int64_t* offset, string* data, const HttpConnPtr& con) {
+    lock_guard<mutex> lk(*this);
+    if (*fileno == lastFile_ && *offset == curLog_->size()) {
+        slaveConns_.push_back(con);
+        return Status();
+    }
+    if (*fileno > lastFile_ || (*fileno == lastFile_ && *offset > curLog_->size())) {
+        error("qfile %ld qoff %ld larger than lastfile %ld off %ld while curlog==NULL",
+            *fileno, *offset, lastFile_, curLog_->size());
+        return Status::fromFormat(EINVAL, "file offset not valid");
+    }
+    Status st = getLog_(*fileno, *offset, data);
+    if (!st.ok()) { //error
+        error("db get log failed");
+        return st;
+    }
+    if (data->empty()) {
+        ++*fileno;
+        *offset = 0;
+    } else {
+        *offset += data->size();
+    }
+    return Status();
+}
+
+Status LogDb::getLog_(int64_t fileno, int64_t offset, string* rec) {
+    LogFile nf;
+    LogFile* lf = NULL;
+    Status st;
+    if (curLog_ && lastFile_ == fileno) {
+        lf = curLog_;
+    } else {
+        lf = &nf;
+        st = nf.open(binlogDir_+FileName::binlogFile(fileno));
+    }
+    if (st.ok()) {
+        st = lf->batchRecord(offset, rec, g_batch_size);
+    }
+    return st;
+}
+
+Status LogDb::updateSlaveStatusLock(Slice key, int64_t nfno, int64_t noff) {
+    lock_guard<mutex> lk(*this);
+    SlaveStatus& ss = slaveStatus_;
+    if (nfno != ss.fileno || noff != ss.offset || ss.key != key) {
+        ss.key = key;
+        ss.fileno = nfno;
+        ss.offset = noff;
+        ss.changed = true;
+        time_t now = time(NULL);
+        if (now - ss.lastSaved > g_flush_slave_interval) {
+            return saveSlave_();
+        }
+    }
+    return Status();
+}

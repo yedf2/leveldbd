@@ -13,6 +13,7 @@ extern Conf g_conf;
 extern int g_page_limit;
 extern int g_batch_count;
 extern int g_batch_size;
+extern int g_flush_slave_interval;
 
 void setGlobalConfig(Conf& conf);
 inline leveldb::Slice convSlice(Slice s) { return leveldb::Slice(s.data(), s.size()); }

@@ -22,6 +22,16 @@ struct FileName {
 };
 
 enum BinlogOp { BinlogWrite=1, BinlogDelete, };
+
+inline const char* strOp(BinlogOp op) {
+    if (op == BinlogDelete) {
+        return "Delete";
+    } else if (op == BinlogWrite) {
+        return "Write";
+    }
+    return "Unkown";
+};
+
 struct LogRecord {
     int dbid;
     time_t tm;
@@ -40,30 +50,38 @@ struct SlaveStatus {
     string key;
     int64_t fileno;
     int64_t offset;
-    SlaveStatus():port(-1),fileno(-1),offset(-1) {}
+    time_t lastSaved;
+    bool changed;
+    SlaveStatus():port(-1),fileno(-1),offset(-1), lastSaved(time(NULL)), changed(0) {}
     bool isValid() { return offset != -1; }
 };
 
-struct LogDb {
-    LogDb():dbid_(-1), binlogSize_(0), lastFile_(0), curLog_(NULL), db_(NULL) {}
+struct LogDb: public mutex {
+    LogDb():dbid_(-1), binlogSize_(0), lastFile_(0), curLog_(NULL), db_(NULL) {  }
     Status init(Conf& conf);
     leveldb::DB* getdb() { return db_; }
     Status write(Slice key, Slice value);
     Status remove(Slice key);
     Status applyLog(Slice record);
     ~LogDb();
-    SlaveStatus slaveStatus;
-    Status saveSlave();
+    vector<HttpConnPtr> removeSlaveConnsLock() { lock_guard<mutex> lk(*this); return move(slaveConns_); }
+    SlaveStatus getSlaveStatusLock() { lock_guard<mutex> lk(*this); return slaveStatus_; }
+    Status updateSlaveStatusLock(Slice key, int64_t fno, int64_t off);
+    Status fetchLogLock(int64_t* fileno, int64_t* offset, string* data, const HttpConnPtr& con);
     static Status dumpFile(const string& name);
 
 
+    SlaveStatus slaveStatus_;
     string binlogDir_, dbdir_;
     int dbid_;
     int binlogSize_;
-    int lastFile_;
+    int64_t lastFile_;
     LogFile* curLog_;
     leveldb::DB* db_;
+    vector<HttpConnPtr> slaveConns_;
 
+    Status getLog_(int64_t fileno, int64_t offset, string* rec);
+    Status saveSlave_();
     Status checkCurLog_();
     Status applyRecord_(LogRecord& rec);
     Status operateDb_(LogRecord& rec);

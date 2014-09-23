@@ -5,143 +5,12 @@
 #include <status.h>
 #include <file.h>
 #include "globals.h"
+#include "binlog-msg.h"
 
-void setupStatServer(StatServer& svr, EventBase& base, leveldb::DB* db, const char* argv[]);
+void setupStatServer(StatServer& svr, EventBase& base, LogDb* db, const char* argv[]);
 void handleHttpReq(EventBase& base, LogDb* db, const HttpConnPtr& con, ThreadPool& rpool, ThreadPool& wpool);
 void processArgs(int argc, const char* argv[], Conf& conf);
-
-Status decodeRangeResp(Slice* body, Slice* key, Slice* value) {
-    Status inval = Status::fromFormat(EINVAL, "bad format for range resp");
-    if (body->empty()) {
-        error("empty body in decode");
-        return inval;
-    }
-    for (const char* p = body->begin(); p < body->end(); p++) {
-        if (*p == ' ') {
-            *key = Slice(body->begin(), p);
-            p++;
-            for (const char* pe = p; pe < body->end(); pe++) {
-                if (*pe == '\n') {
-                    int64_t len = util::atoi(p, pe);
-                    pe++;
-                    if (pe + len > body->end()) {
-                        error("bad format for range resp");
-                        return inval;
-                    }
-                    *value = Slice(pe, pe+len);
-                    *body = Slice(pe, body->end());
-                    return Status();
-                }
-            }
-        }
-    }
-    error("bad format in range format, no space");
-    return inval;
-}
-
-Status decodeBinlogResp(Slice* body, Slice* record) {
-    Status inval = Status::fromFormat(EINVAL, "bad format for binlog resp");
-    if (body->empty()) {
-        error("empty body in binlog resp");
-        return inval;
-    }
-    int64_t magic = *(int64_t*)body->begin();
-    if (magic != LOG_MAGIC) {
-        error("bad magic no in binlog resp");
-        return inval;
-    }
-    int64_t len = *(int64_t*)(body->begin()+8);
-    len = net::ntoh(len);
-    if (body->begin()+8+len > body->end()) {
-        error("bad length in binlog resp len %ld body %ld", len, body->size());
-        return inval;
-    }
-    *record = Slice(body->begin()+8, len);
-    *body = Slice(body->begin()+8+len, body->end());
-    return Status();
-}
-
-void sendSyncReq(LogDb* db, EventBase* base, const HttpConnPtr& con) {
-    SlaveStatus* ss = &db->slaveStatus;
-    HttpRequest& req = con->getRequest();
-    if (ss->key != "=") {
-        req.query_uri = "/range-get" + ss->key;
-    } else {
-        req.query_uri = util::format("/binlog/?f=%05ld&off=%ld", ss->fileno, ss->offset);
-    }
-    debug("geting %s", req.query_uri.c_str());
-    base->safeCall([con] { con->sendRequest();});
-}
-
-void processSyncResp(LogDb* db, const HttpConnPtr& con, EventBase* base) {
-    ExitCaller atend([=]{ sendSyncReq(db, base, con); });
-
-    HttpResponse& res = con->getResponse();
-    Slice body = res.getBody();
-    string reqinfo = res.getHeader("req-info");
-    vector<Slice> fs = Slice(reqinfo).split(' ');
-    if (fs.size() != 3) {
-        error("unexpected header req-info %s", reqinfo.data());
-        return;
-    }
-    SlaveStatus* ss = &db->slaveStatus;
-    Slice key = fs[0];
-    int64_t fno = util::atoi(fs[1].begin(), fs[1].end());
-    int64_t off = util::atoi(fs[2].begin(), fs[2].end());
-    if (key != ss->key || fno != ss->fileno || off != ss->offset) {
-        error("header req-info not match slave status %s %ld %ld", ss->key.c_str(), ss->fileno, ss->offset);
-        return;
-    }
-
-    Status st;
-    if (key != "=") { //range-get resp
-        Slice key, value;
-        while (body.size() && (st=decodeRangeResp(&body, &key, &value), st.ok())) {
-            st = db->write(key, value);
-            if (!st.ok()) {
-                break;
-            }
-        }
-    } else { //binlog resp
-        Slice record;
-        while (body.size() && (st=decodeBinlogResp(&body, &record), st.ok())) {
-            st = db->applyLog(record);
-            if (!st.ok()) {
-                break;
-            }
-        }
-    }
-    if (st.ok()) {
-        string nextinfo = res.getHeader("next-info");
-        vector<Slice> ns = Slice(nextinfo).split(' ');
-        if (ns.size() != 3) {
-            error("unexpected header next-info %s", nextinfo.c_str());
-        } else {
-            ss->key = ns[0];
-            ss->fileno = util::atoi(ns[1].begin(), ns[1].end());
-            ss->offset = util::atoi(ns[2].begin(), ns[2].end());
-        }
-    }
-}
-
-void httpConnectTo(ThreadPool* wpool, LogDb* db, EventBase* base, const string& ip, int port) {
-    HttpConnPtr con = HttpConn::connectTo(base, ip, port, 200);
-    con->onState([=](const TcpConnPtr& con) {
-        TcpConn::State st = con->getState();
-        HttpConnPtr hcon = con;
-        if (st == TcpConn::Connected) {
-            wpool->addTask([=]{sendSyncReq(db, base, con); });
-        } else if (st == TcpConn::Failed || st == TcpConn::Closed) {
-            base->runAfter(3000, [=]{ httpConnectTo(wpool, db, base, ip, port); });
-        }
-    });
-
-    con->onMsg([=](const HttpConnPtr& hcon) {
-        wpool->addTask([=]{
-            processSyncResp(db, hcon, base);
-        });
-    });
-}
+void httpConnectTo(ThreadPool* wpool, LogDb* db, EventBase* base, const string& ip, int port);
 
 int main(int argc, const char* argv[]) {
     string program = argv[0];
@@ -155,6 +24,7 @@ int main(int argc, const char* argv[]) {
     string loglevel = g_conf.get("", "loglevel", "INFO");
     Logger::getLogger().setLogLevel(loglevel);
 
+    info("program begin. loglevel %s", loglevel.c_str());
     //setup thread pool
     ThreadPool readPool(g_conf.getInteger("", "read_threads", 8));
     ThreadPool writePool(1);
@@ -175,10 +45,11 @@ int main(int argc, const char* argv[]) {
     leveldbd.onDefault([&](const HttpConnPtr& con) {
         handleHttpReq(base, &db, con, readPool, writePool);
     });
-    setupStatServer(statsvr, base, db.getdb(), argv);
+    base.runAfter(3000, [&]{ sendEmptyBinlog(&base, &db); }, 5000);
+    setupStatServer(statsvr, base, &db, argv);
 
-    if (db.slaveStatus.isValid()) {
-        httpConnectTo(&writePool, &db, &base, db.slaveStatus.host, db.slaveStatus.port);
+    if (db.slaveStatus_.isValid()) {
+        httpConnectTo(&writePool, &db, &base, db.slaveStatus_.host, db.slaveStatus_.port);
     }
     Signal::signal(SIGINT, [&]{base.exit(); });
     base.loop();
@@ -191,6 +62,25 @@ void handleHttpReq(EventBase& base, LogDb* db, const HttpConnPtr& con, ThreadPoo
     HttpRequest& req = con->getRequest();
     ThreadPool* pool = req.method == "GET" && !Slice(req.uri).starts_with("/nav-")? &rpool: &wpool;
     pool->addTask([=, &base] { handleReq(base, db, con); });
+}
+
+void httpConnectTo(ThreadPool* wpool, LogDb* db, EventBase* base, const string& ip, int port) {
+    HttpConnPtr con = HttpConn::connectTo(base, ip, port, 200);
+    con->onState([=](const TcpConnPtr& con) {
+        TcpConn::State st = con->getState();
+        HttpConnPtr hcon = con;
+        if (st == TcpConn::Connected) {
+            wpool->addTask([=]{sendSyncReq(db, base, con); });
+        } else if (st == TcpConn::Failed || st == TcpConn::Closed) {
+            base->runAfter(3000, [=]{ httpConnectTo(wpool, db, base, ip, port); });
+        }
+    });
+
+    con->onMsg([=](const HttpConnPtr& hcon) {
+        wpool->addTask([=]{
+            processSyncResp(db, hcon, base);
+        });
+    });
 }
 
 void processArgs(int argc, const char* argv[], Conf& g_conf){
@@ -231,10 +121,20 @@ void processArgs(int argc, const char* argv[], Conf& g_conf){
     }
 }
 
-void setupStatServer(StatServer& svr, EventBase& base, leveldb::DB* db, const char* argv[]) {
+void setupStatServer(StatServer& svr, EventBase& base, LogDb* db, const char* argv[]) {
     svr.onState("loglevel", "log level for server", []{return Logger::getLogger().getLogLevelStr(); });
-    svr.onState("pid", "process id of server", [] { return util::format("%d", getpid()); });
-    svr.onState("space", "total space of db kB", [db] { return util::format("%ld", getSize("/", "=", db)/1024); });
+    svr.onState("pid", "process id of server", [] { return getpid(); });
+    svr.onState("space", "total space of db kB", [db] { return getSize("/", "=", db->getdb())/1024; });
+    svr.onState("dbid", "dbid of this db", [db] { return db->dbid_; });
+    svr.onState("binlog-file", "current binlog file no of this db", [db] { return db->lastFile_; });
+    svr.onState("binlog-offset", "current binlog file offset", [db] { 
+        size_t sz = 0;
+        Status st = file::getFileSize(db->binlogDir_+FileName::binlogFile(db->lastFile_), &sz);
+        return sz;
+    });
+    svr.onState("slave-current-key", "slave key of this db", [db] { return db->getSlaveStatusLock().key; });
+    svr.onState("slave-file", "slave file of this db", [db] { return db->getSlaveStatusLock().fileno; });
+    svr.onState("slave-offset", "slave offset of this db", [db] { return db->getSlaveStatusLock().offset; });
     svr.onCmd("lesslog", "set log to less detail", []{ Logger::getLogger().adjustLogLevel(-1); return "OK"; });
     svr.onCmd("morelog", "set log to more detail", [] { Logger::getLogger().adjustLogLevel(1); return "OK"; });
     svr.onCmd("restart", "restart program", [&] { 
@@ -242,19 +142,7 @@ void setupStatServer(StatServer& svr, EventBase& base, leveldb::DB* db, const ch
         return "restarting"; 
     });
     svr.onCmd("stop", "stop program", [&] { base.safeCall([&]{base.exit();}); return "stoping"; });
-    svr.onPage("config", "show config file", [] { 
-        string cont;
-        Status st = file::getContent(g_conf.filename, cont);
-        return st.code() ? "Not Found" : cont;
-    });
-    svr.onPage("help", "show help", []{
-        return
-            "navigate forward: localhost/nav-next/\n"
-            "navigate backward: localhost/nav-prev/\n"
-            "kv get: localhost/d/key1\n"
-            "kv set: curl localhost/d/key1 -d\"value1\"\n"
-            "kv del: curl -XDELETE localhost/d/key1\n"
-            "";
-    });
+    svr.onPageFile("config", "show config file", g_conf.filename);
+    svr.onPageFile("help", "show help", argv[0]+string(".readme"));
 }
 

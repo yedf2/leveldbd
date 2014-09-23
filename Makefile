@@ -3,13 +3,16 @@ CXX=g++
 CXXFLAGS= -DOS_LINUX -g -std=c++11 -Wall -I. -I../handy/handy -Ideps/leveldb/include
 LDFLAGS= -pthread ../handy/handy/libhandy.a deps/leveldb/libleveldb.a deps/snappy/.libs/libsnappy.a
 
-SOURCES = handler.cc globals.cc logdb.cc logfile.cc
+SOURCES = handler.cc globals.cc logdb.cc logfile.cc binlog-msg.cc
 
 PROGRAMS = leveldbd dumplog
 
 OBJECTS = $(SOURCES:.cc=.o)
 
-default: $(PROGRAMS)
+default: $(PROGRAMS) db2
+
+db2: leveldbd
+	cp -f leveldbd db2
 
 clean:
 	-rm -f $(PROGRAMS)
