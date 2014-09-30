@@ -132,9 +132,9 @@ void setupStatServer(StatServer& svr, EventBase& base, LogDb* db, const char* ar
         Status st = file::getFileSize(db->binlogDir_+FileName::binlogFile(db->lastFile_), &sz);
         return sz;
     });
-    svr.onState("slave-current-key", "slave key of this db", [db] { return db->getSlaveStatusLock().key; });
-    svr.onState("slave-file", "slave file of this db", [db] { return db->getSlaveStatusLock().fileno; });
-    svr.onState("slave-offset", "slave offset of this db", [db] { return db->getSlaveStatusLock().offset; });
+    svr.onState("slave-current-key", "slave key of this db", [db] { return db->getSlaveStatusLock().pos.key; });
+    svr.onState("slave-file", "slave file of this db", [db] { return db->getSlaveStatusLock().pos.fileno; });
+    svr.onState("slave-offset", "slave offset of this db", [db] { return db->getSlaveStatusLock().pos.offset; });
     svr.onCmd("lesslog", "set log to less detail", []{ Logger::getLogger().adjustLogLevel(-1); return "OK"; });
     svr.onCmd("morelog", "set log to more detail", [] { Logger::getLogger().adjustLogLevel(1); return "OK"; });
     svr.onCmd("restart", "restart program", [&] { 

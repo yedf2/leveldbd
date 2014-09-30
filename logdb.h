@@ -47,13 +47,11 @@ struct LogRecord {
 struct SlaveStatus {
     string host;
     int port;
-    string key;
-    int64_t fileno;
-    int64_t offset;
+    SyncPos pos;
     time_t lastSaved;
     bool changed;
-    SlaveStatus():port(-1),fileno(-1),offset(-1), lastSaved(time(NULL)), changed(0) {}
-    bool isValid() { return offset != -1; }
+    SlaveStatus():port(-1), lastSaved(time(NULL)), changed(0) {}
+    bool isValid() { return pos.offset != -1; }
 };
 
 struct LogDb: public mutex {
@@ -66,7 +64,7 @@ struct LogDb: public mutex {
     ~LogDb();
     vector<HttpConnPtr> removeSlaveConnsLock() { lock_guard<mutex> lk(*this); return move(slaveConns_); }
     SlaveStatus getSlaveStatusLock() { lock_guard<mutex> lk(*this); return slaveStatus_; }
-    Status updateSlaveStatusLock(Slice key, int64_t fno, int64_t off);
+    Status updateSlaveStatusLock(SyncPos pos);
     Status fetchLogLock(int64_t* fileno, int64_t* offset, string* data, const HttpConnPtr& con);
     static Status dumpFile(const string& name);
 

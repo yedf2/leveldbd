@@ -144,16 +144,12 @@ Status LogDb::loadSlave_() {
     }
     if (lns.size() > ++c) {
         slaveStatus_.port = atoi(lns[c].data());
-    }
-    if (lns.size() > ++c) {
-        slaveStatus_.key = lns[c].eatWord();
-    }
-    if (lns.size() > ++c) {
-        slaveStatus_.fileno = util::atoi(lns[c].data());
-    }
-    if (lns.size() > ++c) {
-        slaveStatus_.offset = util::atoi(lns[c].data());
-        return Status();
+        vector<Slice> lns2;
+        copy(lns.begin()+2, lns.end(), back_inserter(lns2));
+        bool r = slaveStatus_.pos.fromSlices(lns2);
+        if (r) {
+            return Status();
+        }
     }
     st = Status::fromFormat(EINVAL, "bad format for slave status");
     error("%s", st.toString().c_str());
@@ -350,15 +346,15 @@ Status LogDb::operateLog_(Slice data) {
 }
 
 Status LogDb::saveSlave_() {
-    string cont = util::format("%s #host\n%d #port\n%s # / begin key = end key\n%ld #binlog no\n%ld #binlog offset\n",
-        slaveStatus_.host.c_str(), slaveStatus_.port, slaveStatus_.key.c_str(), slaveStatus_.fileno, slaveStatus_.offset);
+    string cont = util::format("%s #host\n%d #port\n%s",
+        slaveStatus_.host.c_str(), slaveStatus_.port, slaveStatus_.pos.toLines().c_str());
     string fname = binlogDir_ + FileName::slaveFile();
     Status st = file::renameSave(fname, fname+".tmp", cont);
     if (!st.ok()) {
         error("save slave status failed %s", st.toString().c_str());
         return st;
     }
-    info("save slave staus ok %s %ld %ld", slaveStatus_.key.c_str(), slaveStatus_.fileno, slaveStatus_.offset);
+    info("save slave staus ok '%s'", slaveStatus_.pos.toString().c_str());
     slaveStatus_.changed = false;
     slaveStatus_.lastSaved = time(NULL);
     return Status();
@@ -405,13 +401,11 @@ Status LogDb::getLog_(int64_t fileno, int64_t offset, string* rec) {
     return st;
 }
 
-Status LogDb::updateSlaveStatusLock(Slice key, int64_t nfno, int64_t noff) {
+Status LogDb::updateSlaveStatusLock(SyncPos pos) {
     lock_guard<mutex> lk(*this);
     SlaveStatus& ss = slaveStatus_;
-    if (nfno != ss.fileno || noff != ss.offset || ss.key != key) {
-        ss.key = key;
-        ss.fileno = nfno;
-        ss.offset = noff;
+    if (pos != ss.pos) {
+        ss.pos = pos;
         ss.changed = true;
         time_t now = time(NULL);
         if (now - ss.lastSaved > g_flush_slave_interval) {

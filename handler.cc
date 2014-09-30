@@ -153,7 +153,7 @@ static void handleRangeGet(LogDb* db, HttpRequest& req, HttpResponse& resp) {
             break;
         }
     }
-    addBinlogHeader(bkey, k1, resp);
+    addBinlogHeader(bkey, k1, req, resp);
 }
 
 int64_t getSize(Slice bkey, Slice ekey, leveldb::DB* db) {
@@ -169,18 +169,19 @@ static void handleNav(leveldb::DB* db, HttpRequest& req, HttpResponse& resp) {
     Slice uri = req.uri;
     Slice navn = "/nav-next/";
     Slice navp = "/nav-prev/";
+    Slice navl = "/nav-prev=";
     int n = 0;
     leveldb::Iterator* it = db->NewIterator(leveldb::ReadOptions());
     unique_ptr<leveldb::Iterator> rel1(it);
     string ln;
     resp.body.append("<a href=\"/nav-next/\">first-page</a></br>");
     if (uri.starts_with(navn)){
-        Slice k = uri.sub(navn.size());
-        Slice key = k;
-        ln = util::format("<a href=\"/nav-prev%.*s\">prev-page</a><br/>",
-            (int)key.size(), key.data());
+        Slice pgkey = uri.sub(navn.size());
+        ln = util::format("<a href=\"/nav-prev/%.*s\">prev-page</a><br/>",
+            (int)pgkey.size(), pgkey.data());
         resp.body.append(ln);
-        for (it->Seek(convSlice(k)); it->Valid(); it->Next()) {
+        Slice key = pgkey;
+        for (it->Seek(convSlice(pgkey)); it->Valid(); it->Next()) {
             key = convSlice(it->key());
             ln = util::format("<a href=\"%.*s?d=%.*s\">delete</a> <a href=\"/d/%.*s\">%.*s</a></br>",
                 (int)uri.size(), uri.data(), (int)key.size(), key.data(),
@@ -194,23 +195,40 @@ static void handleNav(leveldb::DB* db, HttpRequest& req, HttpResponse& resp) {
             (int)key.size(), key.data());
         resp.body.append(ln);
     } else if (uri.starts_with(navp)) {
-        Slice k = uri.sub(navp.size());
-        Slice key = k;
+        Slice pgkey = uri.sub(navp.size());
         vector<string> lns;
-        ln = util::format("<a href=\"/nav-next%.*s\">next-page</a></br>",
-            (int)key.size(), key.data());
+        ln = util::format("<a href=\"/nav-next/%.*s\">next-page</a></br>",
+            (int)pgkey.size(), pgkey.data());
         lns.push_back(ln);
-        if (key[0] == '=') {
-            it->SeekToLast();
-        } else {
-            it->Seek(convSlice(k));
-        }
-        for (; it->Valid(); it->Prev()) {
-            k = convSlice(it->key());
-            if (key[0] < '/') {
+        Slice key = pgkey;
+        for (it->Seek(convSlice(pgkey)); it->Valid(); it->Prev()) {
+            key = convSlice(it->key());
+            ln = util::format("<a href=\"%.*s?d=%.*s\">delete</a> <a href=\"/d/%.*s\">%.*s</a></br>",
+                (int)uri.size(), uri.data(), (int)key.size(), key.data(),
+                (int)key.size(), key.data(), (int)key.size(), key.data()); 
+            lns.push_back(ln);
+            if (++n>=g_page_limit) {
                 break;
             }
-            ln = util::format("<a href=\"/d/%.*s\">%.*s</a></br>",
+        }
+        ln = util::format("<a href=\"/nav-prev/%.*s\">prev-page</a><br/>",
+            (int)key.size(), key.data());
+        lns.push_back(ln);
+        for(auto it = lns.rbegin(); it != lns.rend(); it ++) {
+            resp.body.append(*it);
+        }
+    } else if (uri == navl) {
+        Slice key;
+        vector<string> lns;
+        for (it->SeekToLast(); it->Valid(); it->Prev()) {
+            key = convSlice(it->key());
+            if (lns.empty()) {
+                ln = util::format("<a href=\"/nav-next/%.*s\">next-page</a></br>",
+                    (int)key.size(), key.data());
+                lns.push_back(ln);
+            }
+            ln = util::format("<a href=\"%.*s?d=%.*s\">delete</a> <a href=\"/d/%.*s\">%.*s</a></br>",
+                (int)uri.size(), uri.data(), (int)key.size(), key.data(),
                 (int)key.size(), key.data(), (int)key.size(), key.data()); 
             lns.push_back(ln);
             if (++n>=g_page_limit) {

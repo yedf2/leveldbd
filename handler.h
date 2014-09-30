@@ -13,4 +13,4 @@ using namespace handy;
 int64_t getSize(Slice bkey, Slice ekey, leveldb::DB* db);
 
 void handleReq(EventBase& base, LogDb* db, const HttpConnPtr& con);
-Status decodeKvBody(Slice* body, Slice* key, Slice* value, bool* exist);
+Status decodeKvBody(Slice* body, Slice* key, Slice* value, bool* exist );
