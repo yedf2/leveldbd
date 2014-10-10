@@ -361,6 +361,9 @@ Status LogDb::saveSlave_() {
 }
 
 Status LogDb::fetchLogLock(int64_t* fileno, int64_t* offset, string* data, const HttpConnPtr& con) {
+    if (binlogDir_.empty()) {
+        return Status::fromFormat(EINVAL, "binlog dir empty");
+    }
     lock_guard<mutex> lk(*this);
     if (*fileno == lastFile_ && *offset == curLog_->size()) {
         slaveConns_.push_back(con);
