@@ -1,5 +1,21 @@
+**leveldbd是一个nosql数据库，底层使用leveldb作为存储引擎，以http的方式提供服务。**
+
+提供的特性包括
+
+- 主从同步
+- 主主同步
+- snappy压缩
+- 范围查询
+- 批量读写
+- 易于管理
+- 内置状态查看与管理
+
+
+
+leveldbd使用说明
+
 Get
-http://localhost/d/key1
+curl localhost/d/key1
 
 Set
 curl -d"value1" localhost/d/key1
@@ -7,7 +23,7 @@ curl -d"value1" localhost/d/key1
 Delete
 curl -X"DELETE" localhost/d/key1
 
-Navigate
+Navigate 网页方式进行浏览与管理
 localhost/nav-next/begin-key
 
 Batch-Get
