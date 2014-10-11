@@ -143,6 +143,6 @@ void setupStatServer(StatServer& svr, EventBase& base, LogDb* db, const char* ar
     });
     svr.onCmd("stop", "stop program", [&] { base.safeCall([&]{base.exit();}); return "stoping"; });
     svr.onPageFile("config", "show config file", g_conf.filename);
-    svr.onPageFile("help", "show help", argv[0]+string(".readme"));
+    svr.onPageFile("help", "show help", g_conf.get("", "help_file", "README"));
 }
 

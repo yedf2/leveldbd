@@ -29,5 +29,9 @@ query 'end' is optional which specify the end key (excluded in response), defaul
 query 'inc' is optional which specify whether the begin key should be included in response. default 0
 response data format is kv-format.
 
-kv-format:'<key>\n<value len>\n<value>\n<key2>\n0\n\n<key3>\n-1\n\n<key4>...' -1 indicate key not exist
+kv-format:'<key>\n<value len>\n<value>\n<key2>\n0\n\n<key3>\n-1\n\n<key4>...'
+    value len:
+        -1 indicate key not exist
+        0  value lenght is 0
+
 key-format: '<key1>\n<key2>...'
