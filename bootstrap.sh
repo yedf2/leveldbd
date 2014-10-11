@@ -1,5 +1,5 @@
 echo git submodule update
-git submodule foreach git pull origin master
+git submodule init; git submodule update
 echo making snappy
 cd deps/snappy; 
 if [ -f Makefile ]; then 
