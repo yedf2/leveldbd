@@ -118,12 +118,12 @@ Status LogDb::init(Conf& conf) {
     if (s.ok()) {
         s = loadSlave_();
     }
-    binlogSize_ = conf.getInteger("", "binlog_size", 64*1024*1024);
-    binlogDir_ = conf.get("", "binlog_dir", "");
-    if (binlogDir_.empty()) {
+    binlogSize_ = conf.getInteger("", "binlog_size", 0);
+    binlogSize_ *= 1024*1024;
+    if (binlogSize_ == 0) {
         return s;
     }
-    binlogDir_ = addSlash(binlogDir_);
+    binlogDir_ = dbdir_ + "binlog/";
     dbid_ = conf.getInteger("", "dbid", 0);
     if (dbid_ <= 0) {
         s = Status::fromFormat(EINVAL, "dbid should be set a positive interger when binlog enabled");
@@ -187,7 +187,7 @@ Status LogDb::loadLogs_() {
     if (logs.size()) {
         lastFile_ = logs.back();
     }
-    string cfile = binlogDir_ + FileName::closedFile().data();
+    string cfile = dbdir_ + FileName::closedFile().data();
     string cont;
     s = file::getContent(cfile, cont);
     if (s.code() == ENOENT) { //ignore
@@ -248,7 +248,7 @@ LogDb::~LogDb() {
     }
     delete curLog_;
     if (binlogDir_.size()) {
-        file::writeContent(binlogDir_ + FileName::closedFile(), "1");
+        file::writeContent(dbdir_ + FileName::closedFile(), "1");
     }
     delete db_;
 }
@@ -355,7 +355,7 @@ Status LogDb::operateLog_(Slice data) {
 Status LogDb::saveSlave_() {
     string cont = util::format("%s #host\n%d #port\n%s",
         slaveStatus_.host.c_str(), slaveStatus_.port, slaveStatus_.pos.toLines().c_str());
-    string fname = binlogDir_ + FileName::slaveFile();
+    string fname = dbdir_ + FileName::slaveFile();
     Status st = file::renameSave(fname, fname+".tmp", cont);
     if (!st.ok()) {
         error("save slave status failed %s", st.toString().c_str());

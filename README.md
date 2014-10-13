@@ -26,7 +26,7 @@ make
 
 ##主从复制
 
-[https://github.com/yedf/leveldbd/blob/master/master-slave.md](https://github.com/yedf/leveldbd/blob/master/master-slave.md)
+https://github.com/yedf/leveldbd/blob/master/master-slave.md
 
 ##leveldbd REST接口
 

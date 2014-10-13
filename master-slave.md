@@ -1,4 +1,7 @@
-##master config
+- [master-config](#master-config)
+- [slave-config](#slave-config)
+- [slave-status](#slave-status)
+##master-config
 ```sh
 #run the program as a daemon or not
 #default on
@@ -10,7 +13,7 @@ loglevel=trace
 #db data directory
 dbdir=/root/ldbd
 
-#default "leveldbd.log"
+#default leveldbd.log
 logfile=
 
 #read threads number
@@ -42,16 +45,14 @@ page_limit = 20
 batch_count = 100
 
 #limit size of a batch operation
-#default 3*1024*1024
-batch_size = 1048576
-
-#directory for binlog
-#default empty. do not write binlog
-binlog_dir = /root/ldbd/binlog
+#unit MB
+#default 3
+batch_size = 1
 
 #limit size for binlog file
-#default 64*1024*1024
-binlog_size = 67108864
+#unit MB
+#default 0 do not write binlog
+binlog_size = 64
 
 #id of this db
 #no default
@@ -62,7 +63,7 @@ dbid = 1
 help_file = README.md
 ```
 
-##slave
+##slave-config
 ```sh
 #run the program as a daemon or not
 #default on
@@ -74,7 +75,7 @@ loglevel=trace
 #db data directory
 dbdir=/root/ldbd2
 
-#default "leveldbd.log"
+#default leveldbd.log
 logfile=
 
 #read threads number
@@ -106,16 +107,14 @@ page_limit = 20
 batch_count = 100
 
 #limit size of a batch operation
-#default 3*1024*1024
-batch_size = 1048576
-
-#directory for binlog
-#default empty. do not write binlog
-binlog_dir = 
+#unit MB
+#default 3
+batch_size = 1
 
 #limit size for binlog file
-#default 64*1024*1024
-binlog_size = 67108864
+#unit MB
+#default 0 do not write binlog
+binlog_size = 0
 
 #id of this db
 #no default
@@ -124,4 +123,18 @@ dbid = 2
 #help file
 #default README
 help_file = README.md
+```
+
+##slave-status
+修改slave-status的内容，文件位置/root/ldbd/slave-status, dbdir下的slave-status
+注意，该文件记录了从数据库同步的位置，会被数据库修改
+slave-status内容为
+```sh
+localhost #host
+80 #port
+1 #binlog file no
+0 #binlog offset
+0 #data file finished flag
+ #current key
+
 ```
