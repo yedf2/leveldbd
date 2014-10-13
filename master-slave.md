@@ -1,6 +1,7 @@
 - [master-config](#master-config)
 - [slave-config](#slave-config)
 - [slave-status](#slave-status)
+
 ##master-config
 ```sh
 #run the program as a daemon or not
@@ -126,8 +127,11 @@ help_file = README.md
 ```
 
 ##slave-status
+
 修改slave-status的内容，文件位置/root/ldbd/slave-status, dbdir下的slave-status
+
 注意，该文件记录了从数据库同步的位置，会被数据库修改
+
 slave-status内容为
 ```sh
 localhost #host
