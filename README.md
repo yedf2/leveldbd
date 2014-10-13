@@ -12,7 +12,23 @@
 
 使用了C++11，需要g++4.8 在ubuntu14上测试
 
-leveldbd使用说明
+##编译运行
+
+git clone https://github.com/yedf/leveldbd.git
+
+cd leveldbd
+
+sh bootstrap.sh
+
+make
+
+./leveldbd
+
+##主从复制
+
+[https://github.com/yedf/leveldbd/blob/master/master-slave.md](https://github.com/yedf/leveldbd/blob/master/master-slave.md)
+
+##leveldbd REST接口
 
 ###Get
 

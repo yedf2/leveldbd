@@ -103,13 +103,21 @@ Status LogDb::dumpFile(const string& name) {
 
 Status LogDb::init(Conf& conf) {
 
-    dbdir_ = conf.get("", "dbdir", "ldb");
+    dbdir_ = conf.get("", "dbdir", "ldbd");
     dbdir_ = addSlash(dbdir_);
+    Status s = file::createDir(dbdir_);
+    if (!s.ok() && s.code() != EEXIST) {
+        error("create dir failed: %s", s.toString().c_str());
+        return s;
+    }
     leveldb::Options options;
     options.create_if_missing = true;
-    Status s = (ConvertStatus)leveldb::DB::Open(options, dbdir_, &db_);
+    s = (ConvertStatus)leveldb::DB::Open(options, dbdir_+"ldb", &db_);
     fatalif(!s.ok(), "leveldb open failed %s", s.msg());
 
+    if (s.ok()) {
+        s = loadSlave_();
+    }
     binlogSize_ = conf.getInteger("", "binlog_size", 64*1024*1024);
     binlogDir_ = conf.get("", "binlog_dir", "");
     if (binlogDir_.empty()) {
@@ -124,15 +132,14 @@ Status LogDb::init(Conf& conf) {
     if (s.ok()) {
         s = loadLogs_();
     }
-    if (s.ok()) {
-        s = loadSlave_();
-    }
     return s;
 }
 
 Status LogDb::loadSlave_() {
+    string filename = dbdir_ + FileName::slaveFile();
     string cont;
-    Status st = file::getContent(binlogDir_ + FileName::slaveFile(), cont);
+    Status st = file::getContent(filename, cont);
+    info("load file %s result %d", filename.c_str(), st.code());
     if (st.code() == ENOENT) {
         return Status();
     }
