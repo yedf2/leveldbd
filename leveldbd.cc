@@ -65,7 +65,7 @@ void handleHttpReq(EventBase& base, LogDb* db, const HttpConnPtr& con, ThreadPoo
 }
 
 void httpConnectTo(ThreadPool* wpool, LogDb* db, EventBase* base, const string& ip, int port) {
-    HttpConnPtr con = HttpConn::connectTo(base, ip, port, 200);
+    HttpConnPtr con = TcpConn::createConnection(base, ip, port, 200);
     con->onState([=](const TcpConnPtr& con) {
         TcpConn::State st = con->getState();
         HttpConnPtr hcon = con;
