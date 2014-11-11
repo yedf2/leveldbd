@@ -59,7 +59,7 @@ int main(int argc, const char* argv[]) {
 }
 
 void handleHttpReq(EventBase& base, LogDb* db, const HttpConnPtr& con, ThreadPool& rpool, ThreadPool& wpool){
-    HttpRequest& req = con->getRequest();
+    HttpRequest& req = con.getRequest();
     ThreadPool* pool = req.method == "GET" && !Slice(req.uri).starts_with("/nav-")? &rpool: &wpool;
     pool->addTask([=, &base] { handleReq(base, db, con); });
 }
@@ -76,7 +76,7 @@ void httpConnectTo(ThreadPool* wpool, LogDb* db, EventBase* base, const string& 
         }
     });
 
-    con->onMsg([=](const HttpConnPtr& hcon) {
+    con.onHttpMsg([=](const HttpConnPtr& hcon) {
         wpool->addTask([=]{
             processSyncResp(db, hcon, base);
         });

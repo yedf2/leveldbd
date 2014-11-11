@@ -261,9 +261,9 @@ static void handleSize(leveldb::DB* db, HttpRequest& req, HttpResponse& resp) {
 }
 
 void handleReq(EventBase& base, LogDb* db, const HttpConnPtr& con) {
-    HttpRequest& req = con->getRequest();
+    HttpRequest& req = con.getRequest();
     Status mst;
-    HttpResponse& resp = con->getResponse();
+    HttpResponse& resp = con.getResponse();
     Slice uri = req.uri;
     Slice d = "/d/";
     string value;
@@ -322,6 +322,6 @@ void handleReq(EventBase& base, LogDb* db, const HttpConnPtr& con) {
     }
     info("req %s processed status %d length %lu",
         req.query_uri.c_str(), resp.status, resp.getBody().size());
-    base.safeCall([con]{ con->sendResponse(); info("resp sended");});
+    base.safeCall([con]{ con.sendResponse(); info("resp sended");});
 }
 
