@@ -1,6 +1,6 @@
 #include <daemon.h>
-#include <stat-server.h>
-#include <thread_util.h>
+#include <stat-svr.h>
+#include <threads.h>
 #include "handler.h"
 #include <status.h>
 #include <file.h>
