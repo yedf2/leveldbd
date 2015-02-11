@@ -1,3 +1,4 @@
+$(shell ./bootstrap.sh 1>&2)
 CC=cc
 CXX=g++
 CXXFLAGS= -DOS_LINUX -g -std=c++11 -Wall -I. -Ideps/handy/handy -Ideps/leveldb/include

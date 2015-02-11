@@ -1,14 +1,14 @@
-echo git submodule update
-git submodule init; git submodule update
-echo making snappy
-cd deps/snappy; 
-if [ -f Makefile ]; then 
-    make clean && make || exit 1
-else
-    ./autogen.sh && ./configure && make clean && make || exit 1
-fi
-cd ../..
-echo making leveldb
-cd deps/leveldb; make clean && CXXFLAGS="$CXXFLAGS -I../snappy" make libleveldb.a || exit 1; cd ../..
-echo making handy
-cd deps/handy; ./build_detect_platform && make clean && make || exit 1; cd ../..
+#!/bin/sh
+test -e deps && exit 0
+mkdir -p deps; cd deps
+
+git clone https://github.com/google/snappy &&
+cd snappy && ./autogen.sh && ./configure && make clean && make $1 || exit 1
+cd ..
+
+git clone https://github.com/yedf/leveldb &&
+cd leveldb && make libleveldb.a $1 || exit 1
+cd ..
+
+git clone https://github.com/yedf/handy &&
+cd handy && make $1 || exit 1

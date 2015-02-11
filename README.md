@@ -18,8 +18,6 @@ git clone https://github.com/yedf/leveldbd.git
 
 cd leveldbd
 
-sh bootstrap.sh
-
 make
 
 ./leveldbd
@@ -85,10 +83,10 @@ response data format is kv-format.
 
 
 ###body format
-kv-format:'<key>\n<value len>\n<value>\n<key2>\n0\n\n<key3>\n-1\n\n<key4>...'
+kv-format:'[key]\n[value len]\n[value]\n[key2]\n0\n\n[key3]\n-1\n\n[key4]...'
     value len:
         -1 indicate key not exist
         0  value lenght is 0
 
 
-key-format: '<key1>\n<key2>...'
+key-format: '[key1]\n[key2]...'

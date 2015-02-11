@@ -1,9 +1,0 @@
-[submodule "deps/leveldb"]
-	path = deps/leveldb
-	url = https://github.com/yedf/leveldb
-[submodule "deps/handy"]
-	path = deps/handy
-	url = https://github.com/yedf/handy
-[submodule "deps/snappy"]
-	path = deps/snappy
-	url = https://github.com/google/snappy
