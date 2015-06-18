@@ -1,8 +1,7 @@
 #pragma once
-#include <handy.h>
-#include <http.h>
-#include <logging.h>
-#include <conf.h>
+#include <handy/handy.h>
+#include <handy/http.h>
+#include <handy/conf.h>
 #include "leveldb/db.h"
 #include "globals.h"
 #include "logdb.h"

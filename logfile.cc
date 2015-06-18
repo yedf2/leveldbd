@@ -1,9 +1,9 @@
 #include "logfile.h"
-#include <net.h>
+#include <handy/logging.h>
+#include <handy/net.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <memory>
-#include <logging.h>
 
 Status LogFile::open(const string& name, bool readonly) {
     name_ = name;

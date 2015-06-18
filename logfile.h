@@ -1,5 +1,5 @@
-#include <file.h>
-#include <slice.h>
+#include <handy/file.h>
+#include <handy/slice.h>
 #include <sys/types.h>
 #include <unistd.h>
 

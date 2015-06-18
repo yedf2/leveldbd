@@ -11,4 +11,4 @@ cd leveldb && make libleveldb.a $1 || exit 1
 cd ..
 
 git clone https://github.com/yedf/handy &&
-cd handy && make $1 || exit 1
+cd handy && make libhandy.a || exit 1

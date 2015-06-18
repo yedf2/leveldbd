@@ -1,9 +1,9 @@
-#include <daemon.h>
-#include <stat-svr.h>
-#include <threads.h>
+#include <handy/daemon.h>
+#include <handy/stat-svr.h>
+#include <handy/threads.h>
 #include "handler.h"
-#include <status.h>
-#include <file.h>
+#include <handy/status.h>
+#include <handy/file.h>
 #include "globals.h"
 #include "logdb.h"
 

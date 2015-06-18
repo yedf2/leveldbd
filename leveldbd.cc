@@ -1,9 +1,9 @@
-#include <daemon.h>
-#include <stat-svr.h>
-#include <threads.h>
+#include <handy/daemon.h>
+#include <handy/stat-svr.h>
+#include <handy/threads.h>
 #include "handler.h"
-#include <status.h>
-#include <file.h>
+#include <handy/status.h>
+#include <handy/file.h>
 #include "globals.h"
 #include "binlog-msg.h"
 
@@ -40,8 +40,12 @@ int main(int argc, const char* argv[]) {
     int port = g_conf.getInteger("", "port", 80);
     int stat_port = g_conf.getInteger("", "stat_port", 8080);
     EventBase base(1000);
-    HttpServer leveldbd(&base, ip, port);
-    StatServer statsvr(&base, ip, stat_port);
+    HttpServer leveldbd(&base);
+    int r = leveldbd.bind(ip, port);
+    exitif(r, "bind failed %d %s", errno, strerror(errno));
+    StatServer statsvr(&base);
+    r = statsvr.bind(ip, stat_port);
+    exitif(r, "bind failed %d %s", errno, strerror(errno));
     leveldbd.onDefault([&](const HttpConnPtr& con) {
         handleHttpReq(base, &db, con, readPool, writePool);
     });

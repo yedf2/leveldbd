@@ -1,9 +1,8 @@
 #pragma once
-#include <handy.h>
-#include <http.h>
-#include <logging.h>
-#include <conf.h>
-#include <status.h>
+#include <handy/handy.h>
+#include <handy/http.h>
+#include <handy/conf.h>
+#include <handy/status.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
